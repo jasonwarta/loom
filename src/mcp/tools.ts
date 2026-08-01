@@ -1,7 +1,7 @@
 /**
  * The Dispatch API (ARCHITECTURE section 10) as a transport-independent set of
  * tool handlers. The MCP server (./server.ts) wraps these; tests exercise them
- * directly. This is the operator's (the operator's) entire interface to the platform --
+ * directly. This is the operator's entire interface to the platform --
  * it speaks engineering intent, never a backend command.
  */
 

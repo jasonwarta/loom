@@ -1,6 +1,6 @@
 /**
  * MCP server -- a thin transport that exposes the Dispatch API tools (./tools)
- * to an operator (the operator) over stdio. It owns no logic; the control plane does.
+ * to an operator over stdio. It owns no logic; the control plane does.
  * This is the "hybrid: daemon + MCP" surface from ARCHITECTURE section 18.
  *
  * IMPORTANT: stdout is the MCP protocol channel. Never write to stdout here;

@@ -7,7 +7,7 @@
  *     --repo . --task "..." \        in an isolated worktree, with independent
  *     --criteria "a;b"               review.
  *
- * The MCP transport for the operator (the operator) is a later milestone; this CLI is
+ * The MCP transport for the operator is a later milestone; this CLI is
  * a thin driver over the control plane.
  */
 
@@ -37,7 +37,7 @@ Usage:
 
   loom serve --registry <file.yaml> [--repo <path>] [--poll <ms>]
              [--no-delivery] [--pr-ready] [--pr-remote <name>]
-      Run Loom as a long-lived MCP server over stdio, so an operator (the operator)
+      Run Loom as a long-lived MCP server over stdio, so an operator
       drives it through the Dispatch API tools. Recovers state on start and
       processes the queue continuously. On review-accept the platform pushes
       the branch and opens a DRAFT PR by default; --no-delivery leaves work on
