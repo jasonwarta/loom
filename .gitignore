@@ -1,0 +1,12 @@
+# Node / build (for the future daemon)
+node_modules/
+dist/
+build/
+*.log
+
+# Local state / scratch
+.DS_Store
+*.sqlite
+*.sqlite-*
+.env
+.env.*

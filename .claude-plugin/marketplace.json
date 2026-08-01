@@ -1,0 +1,14 @@
+{
+  "name": "loom",
+  "owner": {
+    "name": "Jason Warta"
+  },
+  "plugins": [
+    {
+      "name": "loom",
+      "source": "./plugin",
+      "description": "Loom: a backend-independent AI engineering orchestration platform. Ships the 'orchestrate' skill (the Principal-Engineer playbook) for dispatching disciplined execution across interchangeable AI workers.",
+      "version": "0.6.0"
+    }
+  ]
+}

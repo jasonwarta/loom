@@ -1,0 +1,94 @@
+# Loom worker registry (starter). Edit freely -- this is data, not code.
+#
+# Each worker is a (backend, model, capability-profile) tuple. The scheduler
+# routes by capability + cost; reviews need an INDEPENDENT reviewer, so keep at
+# least one worker whose preferredTaskTypes includes "review" and that differs
+# from the implementer.
+#
+# Backends available on this machine: codex (subscription), claude
+# (subscription), antigravity/agy (subscription; fronts Gemini/Claude/GPT).
+# The bare `gemini` CLI is NOT authable here (Google deprecated the free tier).
+#
+# costCeilingUsd only binds for backends that REPORT cost (claude does; codex
+# and agy currently don't) -- a ceiling on a non-reporting worker never trips,
+# and status.totalCostUsd is a floor, not the whole spend.
+#
+# POLICY: implementation is routed to codex (terra/luna) in preference to claude
+# to preserve the Claude subscription quota -- hitting Claude limits blocks work,
+# whereas codex runs on a separate subscription. This is encoded here as registry
+# tuning (the scheduler ranks by capability + cost), NOT as an operator
+# instruction -- per the "needs, not names" rule in the orchestrate skill, the
+# operator states needs and the platform routes. claude-sonnet-4-6 (cheaper than
+# sonnet-5) stays available as the implementation FALLBACK for when codex workers
+# are rate-limited or unavailable.
+
+workers:
+  - workerId: claude-impl
+    displayName: "Claude Sonnet 4.6 (investigation; implementation fallback)"
+    backend: claude
+    model: claude-sonnet-4-6
+    availability: available
+    contextWindow: 1000000
+    costTier: medium
+    latencyTier: fast
+    strengths: { coding: 92, reasoning: 88, review: 90, investigation: 90 }
+    # 'implementation' intentionally dropped: codex (terra/luna) is preferred for
+    # implementation to preserve Claude quota. claude stays ELIGIBLE as a fallback
+    # (task type is a scoring bonus, not a hard filter -- scheduler.ts:isEligible),
+    # it just no longer gets the preferred-type bonus for implementation work.
+    preferredTaskTypes: [investigation]
+
+  - workerId: codex-hard
+    displayName: "GPT-5.6 Sol (hard implementation / architecture)"
+    backend: codex
+    model: gpt-5.6-sol
+    availability: available
+    contextWindow: 400000
+    costTier: high
+    latencyTier: medium
+    strengths: { coding: 90, reasoning: 95, review: 85 }
+    preferredTaskTypes: [hard-implementation, architecture]
+
+  - workerId: codex-review
+    displayName: "GPT-5.6 Sol (reviewer)"
+    backend: codex
+    model: gpt-5.6-sol
+    availability: available
+    contextWindow: 400000
+    costTier: high
+    latencyTier: medium
+    strengths: { review: 92, reasoning: 95 }
+    preferredTaskTypes: [review]
+
+  - workerId: codex-terra
+    displayName: "GPT-5.6 Terra (everyday implementer -- preferred)"
+    backend: codex
+    model: gpt-5.6-terra
+    availability: available
+    contextWindow: 400000
+    costTier: medium
+    latencyTier: medium
+    strengths: { coding: 90, reasoning: 86, review: 82 }
+    preferredTaskTypes: [implementation]
+
+  - workerId: codex-luna
+    displayName: "GPT-5.6 Luna (fast/affordable implementer)"
+    backend: codex
+    model: gpt-5.6-luna
+    availability: available
+    contextWindow: 400000
+    costTier: low
+    latencyTier: fast
+    strengths: { coding: 82, reasoning: 78 }
+    preferredTaskTypes: [implementation]
+
+  - workerId: agy-cheap
+    displayName: "Antigravity / Gemini 3.5 Flash (cheap implementer)"
+    backend: antigravity
+    model: "Gemini 3.5 Flash (Low)"
+    availability: available
+    contextWindow: 1000000
+    costTier: low
+    latencyTier: fast
+    strengths: { coding: 70, reasoning: 65 }
+    preferredTaskTypes: [implementation]

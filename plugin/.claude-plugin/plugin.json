@@ -1,0 +1,9 @@
+{
+  "name": "loom",
+  "version": "0.6.0",
+  "description": "Loom: a backend-independent AI engineering orchestration platform. Provides the Principal-Engineer 'orchestrate' skill for dispatching disciplined execution across interchangeable AI workers.",
+  "author": {
+    "name": "Jason Warta"
+  },
+  "keywords": ["orchestration", "multi-agent", "codex", "subagents", "principal-engineer", "backend-independent"]
+}
