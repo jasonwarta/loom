@@ -76,16 +76,20 @@ confusing:
 - **Identity** — a stable per-worker color (a *square* swatch), shown on the strip and on
   each in-flight card's worker chip and the drawer's run rows. This is what lets you see
   "this model → these tasks" at a glance. It carries no status meaning.
-- **Availability** — the *round* dot (green/amber/grey/red). This is the worker's
-  `availability` field from the registry, which is **static config, not a live reachability
-  probe**: verified in code, nothing wires `backend.healthcheck()` to registry availability
-  at runtime, so the dot never changes on its own and is green for every configured worker
-  unless the YAML says otherwise (and in `loom view`/demo it is always the config value).
-  The dot is tooltip-labeled to say so, rather than implying liveness it doesn't have.
+- **Availability** — the *round* dot (green/amber/grey/red). This is now a **live signal
+  when a daemon is running**: `DaemonRuntime` probes every backend's `healthcheck()` on boot
+  and on an interval (default 30s) and pushes the result into registry availability via
+  `ControlPlane.refreshHealth()` → `Registry.setAvailability()` (ARCHITECTURE §19). A backend
+  that reports non-`available` or whose probe throws flips all its workers, the scheduler's
+  hard constraint routes around them, and the dashboard shows it live (the dot's tooltip reads
+  "live, checked Ns ago"). In **observe mode** (`loom view`) there is no daemon and no backend
+  map, so `refreshHealth` is a no-op and the dot stays **static registry config** — the tooltip
+  says so, and the absence of `lastHealthAt` is how the dashboard tells the two apart.
 
-Known gap / future: wiring `healthcheck()` (and in-run rate-limit signals) to flip
-availability live — ARCHITECTURE §19 describes it, but it is not built. Until it is, the
-availability dot should be read as *configured eligibility*, not *reachable right now*.
+Not yet built: an **in-run** rate-limit signal (flip a worker to `rate_limited` mid-run on a
+provider 429). The contract has no distinct rate-limit error code today, so detecting it would
+mean string-matching error text — deferred rather than hacked in. The periodic health probe is
+the live mechanism for now.
 
 ## Out of scope (unchanged)
 

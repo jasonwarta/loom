@@ -14,6 +14,12 @@ export interface DaemonRuntimeOptions {
   readonly concurrency?: number;
   /** Optional idle-poll interval (ms) for idle(); tests can lower it. */
   readonly idlePollMs?: number;
+  /**
+   * How often to probe backend health and refresh registry availability (ms).
+   * Default 30s; set to 0 to disable (e.g. tests that don't want the timer).
+   * A boot probe also runs once during start(), so availability is live from t=0.
+   */
+  readonly healthPollMs?: number;
 }
 
 export class DaemonRuntime {
@@ -22,6 +28,8 @@ export class DaemonRuntime {
   private stopped = false;
   private readonly concurrency: number | undefined;
   private readonly idlePollMs: number;
+  private readonly healthPollMs: number;
+  private healthTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private readonly cp: ControlPlane,
@@ -29,15 +37,24 @@ export class DaemonRuntime {
   ) {
     this.concurrency = opts.concurrency;
     this.idlePollMs = opts.idlePollMs ?? 5;
+    this.healthPollMs = opts.healthPollMs ?? 30_000;
   }
 
   get controlPlane(): ControlPlane {
     return this.cp;
   }
 
-  /** Recover persisted state, then start processing. */
+  /** Recover persisted state, probe backend health, then start processing. */
   async start(): Promise<ReconcileReport> {
     const report = await this.cp.recover();
+    // Boot health probe (ARCHITECTURE section 25) + periodic refresh so registry
+    // availability is a LIVE signal. No-op with no backends (observe mode never
+    // start()s anyway). unref() so the timer never keeps the process alive.
+    await this.cp.refreshHealth();
+    if (this.healthPollMs > 0) {
+      this.healthTimer = setInterval(() => void this.cp.refreshHealth().catch(() => {}), this.healthPollMs);
+      this.healthTimer.unref?.();
+    }
     this.kick();
     return report;
   }
@@ -78,6 +95,10 @@ export class DaemonRuntime {
   /** Stop accepting new work and wait for the current drain to finish. */
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = undefined;
+    }
     await this.idle();
   }
 }

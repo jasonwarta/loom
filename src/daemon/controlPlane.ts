@@ -27,7 +27,7 @@ import type {
 import type { IsolationProvider } from "../isolation/worktree.js";
 import type { DeliveryProvider } from "../delivery/delivery.js";
 import type { LoomStore, StatusSummary } from "../persistence/store.js";
-import type { Registry, WorkerRecord } from "../scheduler/registry.js";
+import type { Availability, Registry, WorkerRecord } from "../scheduler/registry.js";
 import { selectReviewer, selectWorker } from "../scheduler/scheduler.js";
 import { DEFAULT_POLICY, type SchedulerPolicy } from "../scheduler/scoring.js";
 import { startRun, awaitResult, buildRunSpec, type DispatchOptions, type RunExtras } from "../dispatcher/dispatcher.js";
@@ -292,9 +292,34 @@ export class ControlPlane {
     return { ...base, ...extra };
   }
 
-  /** QueryRegistry: available workers + profiles. */
+  /** QueryRegistry: available workers + profiles (availability is live once refreshHealth runs). */
   queryRegistry(): WorkerRecord[] {
     return this.registry.list();
+  }
+
+  /**
+   * Probe every backend's health and push the result into the registry as LIVE
+   * availability (ARCHITECTURE section 19). A backend that throws or reports a
+   * non-`available` status flips all its workers accordingly, so the scheduler's
+   * hard constraint routes around it and the dashboard shows it live (stamped
+   * with `lastHealthAt`). No-op when there are no backends (e.g. observe mode),
+   * which correctly leaves availability as static registry config there.
+   */
+  async refreshHealth(): Promise<void> {
+    const at = Date.now();
+    await Promise.all(
+      [...this.backends.entries()].map(async ([backendId, backend]) => {
+        let availability: Availability;
+        try {
+          availability = (await backend.healthcheck()).status;
+        } catch {
+          availability = "offline"; // an unreachable backend is offline, not silently available
+        }
+        for (const w of this.registry.list()) {
+          if (w.backend === backendId) this.registry.setAvailability(w.workerId, availability, at);
+        }
+      }),
+    );
   }
 
   /**
