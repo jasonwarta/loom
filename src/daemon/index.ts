@@ -60,6 +60,31 @@ export function createDemoLoom(dbPath = ":memory:"): LoomInstance {
   return createLoom({ dbPath, workers, backends });
 }
 
+/**
+ * A self-contained stack for the read-only dashboard demo (`loom ui`). Like
+ * createDemoLoom but with TWO fake workers -- so `requiresIndependentReview`
+ * tasks find a distinct reviewer and flow all the way to Completed instead of
+ * escalating -- and a small per-poll delay so cards visibly dwell in the
+ * In Progress / Validating columns rather than snapping to Done. Fake backend:
+ * no provider, no cost.
+ */
+export function createDashboardDemoLoom(dbPath = ":memory:", pollDelayMs = 400): LoomInstance {
+  const store = new LoomStore(dbPath);
+  const backends = new Map<string, Backend>([["fake", new FakeBackend()]]);
+  const mk = (id: string, name: string): WorkerRecord => ({
+    workerId: id,
+    displayName: name,
+    backend: "fake",
+    model: "fake-model",
+    availability: "available",
+    concurrencyLimit: 2,
+    preferredTaskTypes: ["implementation", "review", "investigation"],
+  });
+  const registry = new Registry([mk("weaver", "Weaver (fake)"), mk("shuttle", "Shuttle (fake)")]);
+  const controlPlane = new ControlPlane({ store, registry, backends, dispatch: { pollDelayMs } });
+  return { store, controlPlane, close: () => store.close() };
+}
+
 export interface LiveLoomConfig {
   readonly dbPath: string;
   /** Path to a YAML registry (workers routed to the "codex"/"claude" backends). */

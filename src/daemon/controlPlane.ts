@@ -95,6 +95,8 @@ export interface TaskSummary {
   readonly state: TaskState;
   readonly priority: number;
   readonly deps: readonly string[];
+  /** First line of the task description, for at-a-glance listing (e.g. kanban cards). */
+  readonly title: string;
 }
 
 export interface QueueView {
@@ -206,6 +208,7 @@ export class ControlPlane {
         state: t.state,
         priority: t.definition.priority,
         deps: t.definition.deps,
+        title: t.definition.description.split("\n")[0]!.slice(0, 120),
       });
     }
     return { counts, tasks: summaries };

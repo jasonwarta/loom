@@ -14,9 +14,10 @@
 import { parseArgs } from "node:util";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { createDemoLoom, createLiveLoom } from "../daemon/index.js";
+import { createDashboardDemoLoom, createDemoLoom, createLiveLoom } from "../daemon/index.js";
 import { DaemonRuntime } from "../daemon/runtime.js";
 import { serveMcp } from "../mcp/server.js";
+import { startDashboard } from "../ui/httpServer.js";
 import type { TaskDefinition } from "../domain/model.js";
 
 const USAGE = `loom -- orchestration control plane
@@ -35,15 +36,78 @@ Usage:
       --resume-from-branch continues prior work on an existing branch instead
       of branching fresh from the base (recovery mode).
 
-  loom serve --registry <file.yaml> [--repo <path>] [--poll <ms>]
+  loom serve --registry <file.yaml> [--repo <path>] [--poll <ms>] [--ui-port <n>]
              [--no-delivery] [--pr-ready] [--pr-remote <name>]
       Run Loom as a long-lived MCP server over stdio, so an operator
       drives it through the Dispatch API tools. Recovers state on start and
       processes the queue continuously. On review-accept the platform pushes
       the branch and opens a DRAFT PR by default; --no-delivery leaves work on
       its branch, --pr-ready opens non-draft PRs, --pr-remote sets the remote.
+      --ui-port also serves the read-only kanban dashboard on that port
+      (localhost) over the same daemon.
+
+  loom ui [--port <n>] [--poll <ms>]
+      Open a self-contained, zero-cost demo of the read-only kanban dashboard
+      (fake backend, no provider): a small epic streams through the board's
+      columns in your browser. Default port 4319. Ctrl-C to stop.
 
   loom help`;
+
+/** Default dashboard port, shared by `serve --ui-port` and `ui`. */
+const DEFAULT_UI_PORT = 4319;
+
+async function runUi(argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    options: { port: { type: "string" }, poll: { type: "string" } },
+  });
+  const port = values.port ? Number(values.port) : DEFAULT_UI_PORT;
+
+  const loom = createDashboardDemoLoom(":memory:", values.poll ? Number(values.poll) : 400);
+  const rt = new DaemonRuntime(loom.controlPlane);
+  await rt.start();
+
+  // Seed an initial epic, then trickle new tasks so the board always has work
+  // in flight to watch move across the columns.
+  seedDemoEpic(rt);
+  let n = 0;
+  const trickle = setInterval(() => {
+    if (n++ >= 40) return; // bounded; the demo is a viewer, not a load test
+    rt.submit({ definition: demoDef(`Task ${n}: ${DEMO_TITLES[n % DEMO_TITLES.length]}`) });
+  }, 4000);
+
+  const dash = await startDashboard(rt, { port });
+  console.log(`loom: demo dashboard live at ${dash.url}`);
+  console.log("      (fake backend, in-memory, no cost) -- Ctrl-C to stop.");
+
+  const shutdown = () => {
+    clearInterval(trickle);
+    void rt.stop().then(async () => {
+      await dash.close();
+      loom.close();
+      process.exit(0);
+    });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+const DEMO_TITLES = [
+  "add rate limiting to the API",
+  "fix flaky auth test",
+  "extract the payments module",
+  "wire up the metrics dashboard",
+  "migrate config to YAML",
+  "cache the registry lookups",
+];
+
+/** Submit a small dependency-linked epic to the demo daemon. */
+function seedDemoEpic(rt: DaemonRuntime): void {
+  const a = rt.submit({ definition: demoDef("Build module A") });
+  const b = rt.submit({ definition: demoDef("Build module B") });
+  rt.submit({ definition: demoDef("Integrate A + B", [a, b]) });
+  rt.submit({ definition: { ...demoDef("Investigate slow startup"), taskType: "investigation" } });
+}
 
 async function runServe(argv: string[]): Promise<void> {
   const { values } = parseArgs({
@@ -52,6 +116,7 @@ async function runServe(argv: string[]): Promise<void> {
       registry: { type: "string" },
       repo: { type: "string" },
       poll: { type: "string" },
+      "ui-port": { type: "string" },
       "no-delivery": { type: "boolean" },
       "pr-ready": { type: "boolean" },
       "pr-remote": { type: "string" },
@@ -98,8 +163,17 @@ async function runServe(argv: string[]): Promise<void> {
   const report = await rt.start();
   process.stderr.write(`loom: recovered (adopted=${report.adopted} requeued=${report.requeued} ingested=${report.ingested})\n`);
 
+  // Optional read-only dashboard over the SAME daemon. stdout is the MCP
+  // channel here, so its startup line goes to stderr.
+  let dash: Awaited<ReturnType<typeof startDashboard>> | undefined;
+  if (values["ui-port"] !== undefined) {
+    dash = await startDashboard(rt, { port: Number(values["ui-port"]) });
+    process.stderr.write(`loom: read-only dashboard at ${dash.url}\n`);
+  }
+
   const shutdown = () => {
-    void rt.stop().then(() => {
+    void rt.stop().then(async () => {
+      if (dash) await dash.close();
       loom.close();
       process.exit(0);
     });
@@ -257,6 +331,9 @@ async function main(): Promise<void> {
       break;
     case "serve":
       await runServe(rest);
+      break;
+    case "ui":
+      await runUi(rest);
       break;
     case "help":
     case "--help":
