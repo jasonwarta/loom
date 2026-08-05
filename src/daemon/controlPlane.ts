@@ -52,6 +52,22 @@ const META_REVISION_NOTES = "revisionNotes";
 const META_REVISE_BRANCH = "reviseBranch";
 const META_OPERATOR_NOTE = "operatorNote";
 
+/**
+ * Task states an operator actively watches -- the ones whose cards get the extra
+ * current-run / attempt / revision lookup in queryQueue. Backlog + terminal states
+ * skip it, keeping the board a cheap single fetch.
+ */
+const WATCHED_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
+  "dispatched",
+  "running",
+  "review",
+  "revision_requested",
+  "waiting",
+  "retry",
+  "failed",
+  "escalated",
+]);
+
 export interface ControlPlaneOptions {
   readonly store: LoomStore;
   readonly registry: Registry;
@@ -89,6 +105,17 @@ export interface SubmitInput {
   readonly preferredWorkerId?: string;
 }
 
+/** The run a task is actively being worked by right now (its most recent run). */
+export interface CurrentRunSummary {
+  readonly runId: string;
+  readonly workerId: string;
+  readonly backendId: string;
+  readonly state: string;
+  /** When the run went `running` (native handle attached); absent while still dispatching. */
+  readonly startedAt?: number;
+  readonly createdAt: number;
+}
+
 export interface TaskSummary {
   readonly id: string;
   readonly taskType: string;
@@ -97,6 +124,17 @@ export interface TaskSummary {
   readonly deps: readonly string[];
   /** First line of the task description, for at-a-glance listing (e.g. kanban cards). */
   readonly title: string;
+  /** Task creation / last-transition times, for board age + duration display. */
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  /** Total cost (USD) across the task's runs; omitted when zero / no cost-reporting backend. */
+  readonly costUsd?: number;
+  /** The run in flight now (worker attribution + elapsed). Present only for in-flight / attention states. */
+  readonly currentRun?: CurrentRunSummary;
+  /** Implementer attempts so far (excludes review runs); present for in-flight / attention states. */
+  readonly attempts?: number;
+  /** Number of revise verdicts so far; present when > 0. */
+  readonly revisions?: number;
 }
 
 export interface QueueView {
@@ -114,6 +152,12 @@ export interface TaskResultView {
    * escalated/failed -- states alone don't carry reasons.
    */
   readonly events: readonly TaskEvent[];
+  /**
+   * The task's reviews WITH findings text (verdict + per-finding severity/title/detail).
+   * The event log carries only `{runId, verdict}`; this is the "why did it revise/reject"
+   * detail, which the events alone drop.
+   */
+  readonly reviews: readonly { runId: string; verdict: ReviewVerdict; findings: readonly ReviewFinding[]; at: number }[];
 }
 
 export interface OpenEscalation {
@@ -195,23 +239,57 @@ export class ControlPlane {
     return id;
   }
 
-  /** QueryQueue: pending/running tasks + counts. */
+  /** QueryQueue: pending/running tasks + counts, enriched for live watching. */
   queryQueue(): QueueView {
     const tasks = this.store.listTasks();
+    const costByTask = this.store.costByTask();
     const counts: Record<string, number> = {};
     const summaries: TaskSummary[] = [];
     for (const t of tasks) {
       counts[t.state] = (counts[t.state] ?? 0) + 1;
-      summaries.push({
+      const cost = costByTask.get(t.id);
+      const base: TaskSummary = {
         id: t.id,
         taskType: t.definition.taskType,
         state: t.state,
         priority: t.definition.priority,
         deps: t.definition.deps,
         title: t.definition.description.split("\n")[0]!.slice(0, 120),
-      });
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        ...(cost !== undefined && cost > 0 ? { costUsd: cost } : {}),
+      };
+      // Enrich only the states an operator is actively watching -- who owns the run
+      // now, how many attempts, how many revisions. Terminal/backlog cards don't need
+      // a per-task run lookup, keeping the board a cheap single fetch.
+      summaries.push(WATCHED_STATES.has(t.state) ? this.enrichSummary(base, t.id) : base);
     }
     return { counts, tasks: summaries };
+  }
+
+  /** Attach current-run + attempt/revision detail to an in-flight / attention task summary. */
+  private enrichSummary(base: TaskSummary, taskId: string): TaskSummary {
+    const runs = this.store.listRunsByTask(taskId);
+    const extra: {
+      currentRun?: CurrentRunSummary;
+      attempts?: number;
+      revisions?: number;
+    } = {};
+    if (runs.length > 0) {
+      const latest = runs[runs.length - 1]!;
+      extra.currentRun = {
+        runId: latest.runId,
+        workerId: latest.workerId,
+        backendId: latest.backendId,
+        state: latest.state,
+        ...(latest.startedAt !== undefined ? { startedAt: latest.startedAt } : {}),
+        createdAt: latest.createdAt,
+      };
+      extra.attempts = runs.filter((r) => r.runSpec.taskType !== "review").length;
+    }
+    const revisions = this.countRevisions(taskId);
+    if (revisions > 0) extra.revisions = revisions;
+    return { ...base, ...extra };
   }
 
   /** QueryRegistry: available workers + profiles. */
@@ -249,7 +327,13 @@ export class ControlPlane {
       const res = this.store.getResult(r.runId);
       if (res) results[r.runId] = res;
     }
-    return { task, runs, results, events: this.store.getEvents(taskId) };
+    return {
+      task,
+      runs,
+      results,
+      events: this.store.getEvents(taskId),
+      reviews: this.store.reviewsByTask(taskId),
+    };
   }
 
   /** CancelTask: cancel a non-terminal task (and its in-flight run, best effort). */

@@ -13,8 +13,9 @@
 
 import { parseArgs } from "node:util";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
-import { createDashboardDemoLoom, createDemoLoom, createLiveLoom } from "../daemon/index.js";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createDashboardDemoLoom, createDemoLoom, createLiveLoom, createObserveLoom } from "../daemon/index.js";
 import { DaemonRuntime } from "../daemon/runtime.js";
 import { serveMcp } from "../mcp/server.js";
 import { startDashboard } from "../ui/httpServer.js";
@@ -51,10 +52,77 @@ Usage:
       (fake backend, no provider): a small epic streams through the board's
       columns in your browser. Default port 4319. Ctrl-C to stop.
 
+  loom view --repo <path> [--db <file>] [--registry <file.yaml>] [--port <n>]
+      Mount the read-only dashboard over an EXISTING store to observe a past or
+      in-flight run -- WITHOUT starting the daemon (no recover, no dispatch, so
+      it can never re-run work). Reads a temp SNAPSHOT copy of the store, so the
+      real .loom.sqlite is never touched. --db overrides the default
+      <repo>/.loom.sqlite; --registry (default <repo>/registry.yaml) supplies
+      worker display names. Default port 4319. Ctrl-C to stop.
+
   loom help`;
 
-/** Default dashboard port, shared by `serve --ui-port` and `ui`. */
+/** Default dashboard port, shared by `serve --ui-port`, `ui`, and `view`. */
 const DEFAULT_UI_PORT = 4319;
+
+async function runView(argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      repo: { type: "string" },
+      db: { type: "string" },
+      registry: { type: "string" },
+      port: { type: "string" },
+    },
+  });
+  const port = values.port ? Number(values.port) : DEFAULT_UI_PORT;
+  const repoRoot = values.repo;
+  const dbSource = values.db ?? (repoRoot ? join(repoRoot, ".loom.sqlite") : undefined);
+  if (!dbSource) {
+    console.error("view: --repo <path> (or --db <file>) is required.");
+    process.exitCode = 1;
+    return;
+  }
+  if (!existsSync(dbSource)) {
+    console.error(`view: store not found: ${dbSource}\n(nothing has run against this repo yet?)`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // Snapshot the store (+ WAL/SHM sidecars) into a temp dir, so observing a real
+  // run cannot mutate it. Opening the copy read-write is harmless -- schema-ensure
+  // and WAL checkpoint touch only the copy, and copying the -wal captures data not
+  // yet checkpointed into the main file.
+  const tmpDir = mkdtempSync(join(tmpdir(), "loom-view-"));
+  const dbCopy = join(tmpDir, "snapshot.sqlite");
+  copyFileSync(dbSource, dbCopy);
+  for (const ext of ["-wal", "-shm"]) {
+    if (existsSync(dbSource + ext)) copyFileSync(dbSource + ext, dbCopy + ext);
+  }
+
+  const registryPath =
+    values.registry ??
+    (repoRoot && existsSync(join(repoRoot, "registry.yaml")) ? join(repoRoot, "registry.yaml") : undefined);
+
+  const loom = createObserveLoom(dbCopy, registryPath);
+  // Deliberately NOT started: the dashboard uses only read verbs, so there is no
+  // recover(), no drain(), no dispatch -- observing a store can never run work.
+  const rt = new DaemonRuntime(loom.controlPlane);
+  const dash = await startDashboard(rt, { port });
+  console.log(`loom: observe-only dashboard at ${dash.url}`);
+  console.log(`      snapshot of ${dbSource} -- daemon NOT started, nothing will run. Ctrl-C to stop.`);
+
+  const shutdown = () => {
+    void rt.stop().then(async () => {
+      await dash.close();
+      loom.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+      process.exit(0);
+    });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
 
 async function runUi(argv: string[]): Promise<void> {
   const { values } = parseArgs({
@@ -334,6 +402,9 @@ async function main(): Promise<void> {
       break;
     case "ui":
       await runUi(rest);
+      break;
+    case "view":
+      await runView(rest);
       break;
     case "help":
     case "--help":
