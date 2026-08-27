@@ -37,6 +37,12 @@ export interface WorkerRecord {
   readonly repositoryAccess?: readonly string[];
   readonly concurrencyLimit?: number;
   readonly availability?: Availability;
+  /**
+   * When `availability` was last set from a live backend health probe (epoch ms).
+   * Absent means the value is static registry config, not a live signal -- callers
+   * (e.g. the dashboard) use this to distinguish "reachable now" from "configured".
+   */
+  readonly lastHealthAt?: number;
   readonly preferredTaskTypes?: readonly string[];
   /** Cumulative cost ceiling (USD). When spend reaches it, the worker is ineligible. */
   readonly costCeilingUsd?: number;
@@ -59,6 +65,18 @@ export class Registry {
 
   upsert(worker: WorkerRecord): void {
     this.workers.set(worker.workerId, worker);
+  }
+
+  /**
+   * Set a worker's live availability from a health probe, stamping `lastHealthAt`.
+   * No-op for an unknown worker. This is how ARCHITECTURE section 19's "healthcheck
+   * results drive availability transitions" is realized -- the scheduler's hard
+   * constraint then routes around a worker the probe marked degraded/offline.
+   */
+  setAvailability(workerId: string, availability: Availability, at: number): void {
+    const w = this.workers.get(workerId);
+    if (!w) return;
+    this.workers.set(workerId, { ...w, availability, lastHealthAt: at });
   }
 
   /** Replace the entire worker set (used by hot-reload). */

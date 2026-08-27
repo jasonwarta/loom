@@ -242,11 +242,14 @@ function renderWorkers(registry, status) {
     const av = w.availability || "available";
     const load = util[w.workerId] || 0;
     const cap = w.concurrencyLimit != null ? "/" + w.concurrencyLimit : "";
-    // Square = worker identity color (matches its cards). Round dot = availability,
-    // which is the registry's static config, NOT a live reachability probe.
+    // Square = worker identity color (matches its cards). Round dot = availability:
+    // LIVE (health-probed, w.lastHealthAt set) or static registry config otherwise.
+    const avTitle = w.lastHealthAt
+      ? "availability: " + av + " — live, checked " + fmtDur(Date.now() - w.lastHealthAt) + " ago"
+      : "availability: " + av + " — from registry config (no live health probe in this mode)";
     return '<div class="worker" title="' + esc(w.workerId) + " · backend " + esc(w.backend || "?") + '">' +
       idsw(colorForWorker(w.workerId)) +
-      '<span class="av ' + av + '" title="availability: ' + av + ' — from registry config, not a live health probe"></span>' +
+      '<span class="av ' + av + '" title="' + avTitle + '"></span>' +
       "<span>" + esc(w.displayName || w.workerId) + "</span>" +
       '<span class="load" title="in-flight runs right now">' + load + cap + "</span></div>";
   }).join("");
