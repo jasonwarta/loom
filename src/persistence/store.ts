@@ -24,7 +24,7 @@ import {
   type TaskRecord,
   type TaskState,
 } from "../domain/model.js";
-import type { ReviewResult, RunResult, RunSpec } from "../contract/index.js";
+import type { ReviewFinding, ReviewResult, ReviewVerdict, RunResult, RunSpec } from "../contract/index.js";
 
 interface TaskRow {
   id: string;
@@ -253,6 +253,41 @@ export class LoomStore {
       .prepare("SELECT id, task_id, reason, raised_to, at FROM escalation WHERE status = 'open' ORDER BY at ASC")
       .all() as Array<{ id: string; task_id: string; reason: string; raised_to: string; at: number }>;
     return rows.map((r) => ({ id: r.id, taskId: r.task_id, reason: r.reason, raisedTo: r.raised_to, at: r.at }));
+  }
+
+  /**
+   * A task's reviews with their FINDINGS text (verdict + per-finding severity/title/
+   * detail). The event log only carries `{runId, verdict}`; the findings -- the "why
+   * did it revise/reject" signal -- live here. Read-only accessor for the result view.
+   */
+  reviewsByTask(taskId: string): Array<{ runId: string; verdict: ReviewVerdict; findings: ReviewFinding[]; at: number }> {
+    const rows = this.db
+      .prepare("SELECT run_id, verdict, findings, at FROM review WHERE task_id = ? ORDER BY at ASC")
+      .all(taskId) as Array<{ run_id: string; verdict: string; findings: string; at: number }>;
+    return rows.map((r) => ({
+      runId: r.run_id,
+      verdict: r.verdict as ReviewVerdict,
+      findings: (JSON.parse(r.findings) as ReviewFinding[]) ?? [],
+      at: r.at,
+    }));
+  }
+
+  /**
+   * Per-task total cost (USD), summed across the task's runs in ONE pass over
+   * run_result -- so the board can show cost per card without an N+1 read.
+   * Mirrors status()'s global-cost pass; only cost-reporting backends contribute.
+   */
+  costByTask(): Map<string, number> {
+    const out = new Map<string, number>();
+    const rows = this.db
+      .prepare("SELECT r.task_id tid, rr.result res FROM run_result rr JOIN run r ON r.run_id = rr.run_id")
+      .all() as Array<{ tid: string; res: string }>;
+    for (const row of rows) {
+      const cost = (JSON.parse(row.res) as RunResult).usage?.costUsd;
+      if (typeof cost !== "number") continue;
+      out.set(row.tid, (out.get(row.tid) ?? 0) + cost);
+    }
+    return out;
   }
 
   /** Mark a task's open escalations resolved (e.g. the operator resumed the task). */

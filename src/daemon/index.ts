@@ -85,6 +85,22 @@ export function createDashboardDemoLoom(dbPath = ":memory:", pollDelayMs = 400):
   return { store, controlPlane, close: () => store.close() };
 }
 
+/**
+ * An OBSERVE-ONLY stack over an existing store: for mounting the read-only
+ * dashboard against a populated `.loom.sqlite` WITHOUT any ability to run work.
+ * The backend map is EMPTY -- the five read verbs (queryQueue/queryRegistry/
+ * inspectWorker/getResult/status) read straight from the store and touch no
+ * backend, so a viewer needs none. Never call `drain()`/`recover()` on this;
+ * `loom view` mounts the dashboard and never starts the runtime, so no task is
+ * ever dispatched. Registry (optional) only supplies worker display names.
+ */
+export function createObserveLoom(dbPath: string, registryPath?: string): LoomInstance {
+  const store = new LoomStore(dbPath);
+  const registry = registryPath ? loadRegistry(registryPath) : new Registry([]);
+  const controlPlane = new ControlPlane({ store, registry, backends: new Map() });
+  return { store, controlPlane, close: () => store.close() };
+}
+
 export interface LiveLoomConfig {
   readonly dbPath: string;
   /** Path to a YAML registry (workers routed to the "codex"/"claude" backends). */
